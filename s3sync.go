@@ -84,6 +84,7 @@ var (
 	config     *Config
 	sess       *session.Session
 	logger     = *log.New(os.Stdout, "s3sync:", log.Ldate|log.Ltime)
+	skipNoErr  = errors.New("skip ,no error")
 )
 
 func init() {
@@ -181,10 +182,14 @@ func procMessage(message *sqs.Message) error {
 	logger.Printf("event: %v bucket name: %v object key: %v", eventName, bucketName, objKey)
 	// skip director
 	if strings.HasSuffix(objKey, "/") {
-		return nil
+		return skipNoErr
 	}
 	localPath := config.GetLocalStorePath(objKey)
 	logger.Printf("local path: %v", localPath)
+	// 实际上并没有错误,只是当前这个程序得到的消息不是当前实例需要存储的
+	if localPath == "" {
+		return skipNoErr
+	}
 
 	switch eventName {
 	case "ObjectCreated:Put": // 在 s3 中存储一个对象
