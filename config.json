@@ -1,0 +1,11 @@
+{
+    "aws-queue": "ms-transport-dev",
+    "aws-region": "cn-north-1",
+    "sync": {
+        "test-folder/": "/tmp/xxx/local-store-dir",
+        "test-folder/folder-01/": "/tmp/srv/local-store-dir",
+        "a/": "b",
+        "huafei.funguide.com.cn/CmbcRecharge/": "/srv/web-pages/html/CmbcRecharge",
+        "cc/": "b"
+    }
+}
