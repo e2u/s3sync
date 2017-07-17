@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -42,7 +43,7 @@ type Config struct {
 // 返回这个 objectkey 在本地存储的完整路径
 func (c *Config) GetLocalStorePath(objectKey string) string {
 	// objectKey 从消息队列中得到的是 url encode 过的值
-	objectKey, _ = url.QueryUnescape(objectKey)
+	// objectKey, _ = url.QueryUnescape(objectKey)
 	for _, k := range c.sortedSyncKeys {
 		if strings.HasPrefix(objectKey, k) {
 			local, ok := c.Sync[k]
@@ -80,11 +81,12 @@ type S3Event struct {
 }
 
 var (
-	configFile string
-	config     *Config
-	sess       *session.Session
-	logger     = *log.New(os.Stdout, "s3sync:", log.Ldate|log.Ltime)
-	skipNoErr  = errors.New("skip ,no error")
+	configFile  string
+	config      *Config
+	sess        *session.Session
+	logger      = *log.New(os.Stdout, "s3sync:", log.Ldate|log.Ltime)
+	skipNoErr   = errors.New("skip ,no error")
+	ignoreFiles = []string{".ssh", ".git", ".svn", ".DS_Store"}
 )
 
 func init() {
@@ -133,7 +135,7 @@ func initAWSSession() {
 
 func main() {
 
-	// sess.Config.WithLogLevel(aws.LogDebugWithHTTPBody)
+	var wg sync.WaitGroup
 	sqss := sqs.New(sess)
 
 	queueURL := getQueueUrl(config.AWSQueue, sqss)
@@ -149,14 +151,20 @@ func main() {
 		}
 		logger.Printf("receive message count: %v", len(resp.Messages))
 		for _, message := range resp.Messages {
-			if err := procMessage(message); err != nil {
-				logger.Println(err.Error())
-				continue
-			}
-			sqss.DeleteMessage(&sqs.DeleteMessageInput{
-				QueueUrl:      queueURL,
-				ReceiptHandle: message.ReceiptHandle,
-			})
+			wg.Add(1)
+			go func(_message *sqs.Message) {
+				defer func() {
+					sqss.DeleteMessage(&sqs.DeleteMessageInput{
+						QueueUrl:      queueURL,
+						ReceiptHandle: message.ReceiptHandle,
+					})
+					wg.Done()
+				}()
+				if err := procMessage(_message); err != nil {
+					logger.Println(err.Error())
+				}
+			}(message)
+			wg.Wait()
 		}
 	}
 
@@ -177,8 +185,9 @@ func procMessage(message *sqs.Message) error {
 	}
 	record := s3event.Records[0]
 	eventName := record.EventName
-	objKey := record.S3.Object.Key
+	objKey, _ := url.QueryUnescape(record.S3.Object.Key)
 	bucketName := record.S3.Bucket.Name
+
 	logger.Printf("event: %v bucket name: %v object key: %v", eventName, bucketName, objKey)
 	// skip director
 	if strings.HasSuffix(objKey, "/") {
@@ -217,6 +226,7 @@ func getQueueUrl(queueName string, s *sqs.SQS) *string {
 
 // 从 s3 上复制文件到本地目录
 func getObject(bucketName, key string) ([]byte, error) {
+	logger.Printf("get object from s3: %v/%v", bucketName, key)
 	ts := s3.New(sess)
 	resp, err := ts.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(bucketName),
